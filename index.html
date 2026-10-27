@@ -4080,8 +4080,9 @@
                             baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1) + 'comanda_cliente.html';
                         }
                     }
-                    // URL FIXA POR MESA (ex: comanda_cliente.html?mesa=2) para que o QR Code seja estático e atualize em tempo real
-                    const qrText = `${baseUrl}?mesa=${table.number}`;
+                    // QR da comanda: mesa + identificador da sessão (sid). Sem o sid o banco não libera a comanda/chat para o celular.
+                    if (table.status === 'ocupada' && !table.sessionId) { table.sessionId = this.newSid(); this.saveStorage(); }
+                    const qrText = `${baseUrl}?mesa=${table.number}` + (table.sessionId ? `&sid=${encodeURIComponent(table.sessionId)}` : '');
                     
                     this.qrClientName = table.client || 'Cliente';
                     this.qrTableNumber = table.number;
