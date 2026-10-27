@@ -99,13 +99,14 @@
             <!-- Encerrado -->
             <template x-if="chatClosed">
                 <div class="p-3 text-center text-[11px] text-slate-400 bg-slate-900 border-t border-slate-700"
-                     x-text="sessionEnded ? 'Atendimento encerrado: sua comanda foi finalizada. Obrigado pela visita!' : 'Conectando à sua comanda...'">
+                     x-text="sessionEnded ? 'Atendimento encerrado: sua comanda foi finalizada. Obrigado pela visita!' : ('Conectando à sua comanda...' + (syncErr ? ' (' + syncErr + ')' : ''))">
                 </div>
             </template>
 
             <!-- Atalhos + Input Message -->
             <div x-show="!chatClosed" class="bg-slate-900 border-t border-slate-700">
                 <p x-show="chatNotice" class="px-3 pt-2 text-[10px] text-amber-400" x-text="chatNotice"></p>
+                <p x-show="syncErr && !chatNotice" class="px-3 pt-2 text-[10px] text-slate-500" x-text="'Sincronizando... (' + syncErr + ')'"></p>
                 <div class="px-3 pt-2.5 flex gap-1.5 overflow-x-auto">
                     <template x-for="chip in chatChips" :key="chip.label">
                         <button @click="sendChip(chip)" class="shrink-0 bg-slate-950 hover:bg-indigo-600/30 border border-slate-700 hover:border-indigo-500/60 text-slate-200 text-[11px] font-bold px-2.5 py-1.5 rounded-full transition-all flex items-center space-x-1.5">
@@ -672,6 +673,7 @@
                 notificationText: 'Pedido finalizado com sucesso!',
                 notificationIcon: 'fa-circle-check',
                 isFinalized: false,
+                syncErr: '',          // último motivo pelo qual não conseguiu sincronizar a comanda (diagnóstico)
                 tableOpen: false,     // comanda da mesa aberta agora (atualiza sozinho, sem recarregar a página)
                 sessionEnded: false,  // a comanda deste cliente já foi finalizada nesta página
                 previousStatus: null,
@@ -839,7 +841,7 @@
                     try {
                         if (!this.sid) { this.tableChecked = true; return; }     // sem o QR/sessão não há comanda para mostrar
                         const rs = await fetch(`${SC_DB}/sessoes/${encodeURIComponent(this.sid)}.json`, { cache: 'no-store' });
-                        if (!rs.ok) return;                                       // rede/permissão: tenta de novo no próximo ciclo
+                        if (!rs.ok) { this.syncErr = 'sessão: HTTP ' + rs.status; console.warn('[SmartComanda] sessoes', rs.status); return; }   // rede/permissão: tenta de novo no próximo ciclo
                         const sess = await rs.json();
                         let tableFound = null;
                         if (!sess) {                                              // link de uma sessão que não existe mais
@@ -850,14 +852,15 @@
                                 const uid = SC_AUTH.uid() || 'anon';
                                 const j = await fetch(`${SC_DB}/acessos/${encodeURIComponent(this.sid)}/${uid}.json`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'true' });
                                 this._joined = j.ok;
+                                if (!j.ok) { this.syncErr = 'acesso: HTTP ' + j.status; console.warn('[SmartComanda] acessos', j.status); }
                             }
                             const rt = await fetch(`${SC_DB}/mesa_publica/mesa_${this.tableNumber}.json`, { cache: 'no-store' });
                             if (rt.status === 401 || rt.status === 403) {         // a mesa agora é de outro cliente
                                 this.endSessionLocal(); this.previousStatus = 'ocupada'; this.tableChecked = true; return;
                             }
-                            if (!rt.ok) return;
+                            if (!rt.ok) { this.syncErr = 'comanda: HTTP ' + rt.status; console.warn('[SmartComanda] mesa_publica', rt.status); return; }
                             tableFound = await rt.json();
-                            if (!tableFound || tableFound.sessionId !== this.sid) return;
+                            if (!tableFound || tableFound.sessionId !== this.sid) { this.syncErr = 'aguardando o caixa publicar a comanda'; return; }
                         } else {
                             tableFound = { number: this.tableNumber, status: 'livre' };   // sessão encerrada
                         }
@@ -878,6 +881,7 @@
                             try { localStorage.setItem('sc_sid_mesa_' + this.tableNumber, this.sid); } catch(e) {}
                         }
                         this.tableChecked = true;
+                        this.syncErr = '';
                         if (this.finalized && this._ratedChecked !== this.ratingSid) {
                             this._ratedChecked = this.ratingSid;
                             this.refreshRatedState();
@@ -892,7 +896,7 @@
                             this.total = tableFound.total || 0;
                             this.items = tableFound.items || [];
                         }
-                    } catch(e) {}
+                    } catch(e) { this.syncErr = 'rede: ' + ((e && e.message) || e); }
                 },
 
                 // ===== Chat em tempo real =====
@@ -914,7 +918,7 @@
                     const readUpTo = this.chatMeta.clientReadUpTo || 0;
                     return this.chatMessages.filter(m => m.sender !== 'cliente' && !m.pending && (m.timestamp || 0) > readUpTo).length;
                 },
-                get chatClosed() { return this.sessionEnded || !this.tableOpen; },
+                get chatClosed() { return this.sessionEnded || (this.tableChecked && !this.tableOpen); },
                 get attendantOnline() { return (this.chatNow - this.attSeen.at) < 25000; },
                 get attendantTyping() { return (this.chatNow - this.attTypingSeen.at) < 5000; },
                 isReadByStaff(msg) { return (msg.timestamp || 0) <= (this.chatMeta.staffReadUpTo || 0); },
@@ -1029,6 +1033,9 @@
                     } catch (e) {
                         const q = this.chatPending.find(x => x.localId === localId);
                         if (q) { q.pending = false; q.failed = true; }
+                        console.warn('[SmartComanda] envio do chat falhou', e);
+                        this.chatNotice = 'Não foi possível enviar (' + ((e && e.message) || 'sem conexão') + '). Toque na mensagem para tentar de novo.';
+                        setTimeout(() => { this.chatNotice = ''; }, 8000);
                     }
                 },
 

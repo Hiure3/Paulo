@@ -3050,6 +3050,7 @@
 
                     window.addEventListener('offline', () => this.isOnline = false);
                     this.initAtendimento();
+                    setInterval(() => { this.publishComandas(); }, 20000);   // mantém a comanda publicada para o celular do cliente (tempo na mesa, total, status)
 
                     const savedMenu = localStorage.getItem('smartcomanda_menu_v8');
                     if(savedMenu) {
@@ -3965,8 +3966,12 @@
                     });
                     try {
                         const r = await fetch(`${SC_DB}/.json`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(upd) });
-                        if (r.ok) localStorage.setItem('smartcomanda_pub_sids_v1', JSON.stringify(now));
-                    } catch (e) {}
+                        if (r.ok) { localStorage.setItem('smartcomanda_pub_sids_v1', JSON.stringify(now)); this._pubWarned = false; }
+                        else {
+                            console.warn('[SmartComanda] falha ao publicar comandas para o celular: HTTP ' + r.status);
+                            if (!this._pubWarned) { this._pubWarned = true; alert('Não foi possível publicar a comanda para o celular do cliente (erro ' + r.status + '). Verifique o login, a ativação do login Anônimo/E-mail no Firebase e as regras do banco.'); }
+                        }
+                    } catch (e) { console.warn('[SmartComanda] falha ao publicar comandas', e); }
                 },
 
                 calcTotalPeople() {
@@ -4082,6 +4087,7 @@
                     }
                     // QR da comanda: mesa + identificador da sessão (sid). Sem o sid o banco não libera a comanda/chat para o celular.
                     if (table.status === 'ocupada' && !table.sessionId) { table.sessionId = this.newSid(); this.saveStorage(); }
+                    this.publishComandas();   // garante que a comanda desta mesa já está no banco quando o cliente escanear
                     const qrText = `${baseUrl}?mesa=${table.number}` + (table.sessionId ? `&sid=${encodeURIComponent(table.sessionId)}` : '');
                     
                     this.qrClientName = table.client || 'Cliente';
